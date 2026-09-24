@@ -6,15 +6,21 @@ import regex as re
 from collections import Counter
 from typing import BinaryIO
 
-# PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 
 class PreTokenizer:
-    def __init__(self, eos: bytes = b"<|endoftext|>", num_chunk_processes: int = 4, pat: str = PAT):
+    def __init__(
+        self,
+        eos: bytes = b"<|endoftext|>",
+        num_chunk_processes: int = 4,
+        pat: str = PAT,
+        special_tokens: list[str] | None = None,
+    ):
         self.eos = eos
         self.num_chunk_processes = num_chunk_processes
         self.pat = pat
+        self.special_tokens = special_tokens if special_tokens is not None else [eos.decode("utf-8")]
 
     @staticmethod
     def _read_chunk(f: BinaryIO, boundaries: tuple[int, int]) -> str:
@@ -32,7 +38,9 @@ class PreTokenizer:
         return chunks
 
     def _split_chunk_to_docs(self, chunk: str) -> list[str]:
-        return chunk.split(self.eos.decode("utf-8"))
+        delim = "|".join(re.escape(s) for s in self.special_tokens)
+
+        return re.split(delim, chunk)
 
     def pretokenize_doc(self, doc: str):
         counter = Counter()
