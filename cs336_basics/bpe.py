@@ -4,6 +4,7 @@ from tqdm import tqdm
 import regex as re
 
 from collections import Counter
+from multiprocessing import Pool
 from typing import BinaryIO
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -49,12 +50,32 @@ class PreTokenizer:
 
         return counter
 
+    def _pretokenize_with_chunk_boundaries(self, input_path: str, boundaries: tuple[int, int]) -> Counter:
+        counter = Counter()
+
+        with open(input_path, "rb") as f:
+            chunk = self._read_chunk(f, boundaries)
+        for doc in tqdm(self._split_chunk_to_docs(chunk)):
+            counter += self.pretokenize_doc(doc)
+
+        return counter
+
     def pretokenize(self, input_path: str) -> Counter:
         counter = Counter()
 
-        for chunk in self.read_chunks(input_path=input_path):
-            for doc in tqdm(self._split_chunk_to_docs(chunk)):
-                counter += self.pretokenize_doc(doc)
+        with open(input_path, "rb") as f:
+            boundaries = find_chunk_boundaries(
+                file=f, desired_num_chunks=self.num_chunk_processes, split_special_token=self.eos
+            )
+
+            boundary_edges = list(zip(boundaries[:-1], boundaries[1:]))
+            worker_args = [(input_path, edges) for edges in boundary_edges]
+
+            with Pool(self.num_chunk_processes) as p:
+                chunk_counters = p.starmap(self._pretokenize_with_chunk_boundaries, worker_args)
+
+        for chunk_counter in chunk_counters:
+            counter += chunk_counter
 
         return counter
 
