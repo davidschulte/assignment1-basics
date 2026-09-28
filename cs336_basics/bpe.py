@@ -43,14 +43,14 @@ class Tokenizer:
         f.seek(start)
         return f.read(end - start).decode("utf-8", errors="ignore")
 
-    def read_chunks(self, input_path: str) -> list[str]:
-        with open(input_path, "rb") as f:
-            boundaries = find_chunk_boundaries(
-                file=f, desired_num_chunks=self.num_chunk_processes, split_special_token=self.eos
-            )
-            chunks = [self._read_chunk(f, boundary) for boundary in zip(boundaries[:-1], boundaries[1:])]
-
-        return chunks
+    # def read_chunks(self, input_path: str) -> list[str]:
+    #     with open(input_path, "rb") as f:
+    #         boundaries = find_chunk_boundaries(
+    #             file=f, desired_num_chunks=self.num_chunk_processes, split_special_token=self.eos
+    #         )
+    #         chunks = [self._read_chunk(f, boundary) for boundary in zip(boundaries[:-1], boundaries[1:])]
+    #
+    #     return chunks
 
     def _split_chunk_to_docs(self, chunk: str) -> list[str]:
         delim = "|".join(re.escape(s) for s in self.special_tokens)
@@ -150,18 +150,13 @@ class Tokenizer:
 
         for _ in tqdm(range(self.vocab_size - len(vocab))):
             # determine most common token pair
-            token_pair_counts = defaultdict(int)
+            token_pair_counts = Counter()
             for pretoken, pretoken_count in pretokenize_counter.items():
                 for token_pair, token_indices in pretoken_to_token_pairs_and_indices[pretoken].items():
                     token_pair_counts[token_pair] += len(token_indices) * pretoken_count
 
-            # sort token pairs by count and then lexicography
-            token_pair_counts = dict(
-                sorted(token_pair_counts.items(), key=lambda item: (item[1], item[0]), reverse=True)
-            )
-
             # get token pair to merge
-            merge_pair = next(iter(token_pair_counts))
+            merge_pair = max(token_pair_counts.items(), key=lambda item: (item[1], item[0]))[0]
 
             # merge
             vocab.add(b"".join(merge_pair))
