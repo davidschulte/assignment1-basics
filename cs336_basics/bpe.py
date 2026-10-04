@@ -1,5 +1,6 @@
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 import os
+import numpy as np
 
 from tqdm import tqdm
 import regex as re
@@ -106,35 +107,41 @@ class Tokenizer:
 
     @staticmethod
     def merge_token_pair_in_token_pairs_to_indices(
-        token_pairs_to_indices: dict[tuple[bytes, bytes], list], merge_pair: tuple[bytes, bytes]
+        token_pairs_to_indices: dict[tuple[bytes, bytes], dict[str, list[int]]], merge_pair: tuple[bytes, bytes]
     ) -> None:
         """Update the mapping of token pairs to indices by merging a token pair and updating the index list of overlapping pairs"""
-        if merge_pair not in token_pairs_to_indices:
-            return
+        merge_pair_idxs_per_pretoken = token_pairs_to_indices[merge_pair]
 
-        merge_pair_idxs = token_pairs_to_indices[merge_pair]
-
-        all_new_merges = defaultdict(list)
-        for pair, pair_indices in list(token_pairs_to_indices.items()):
+        all_new_merges = defaultdict(lambda: defaultdict(list))
+        for pair, pair_idxs_per_pretoken in list(token_pairs_to_indices.items()):
             if pair == merge_pair:
                 continue
 
             # token pair overlaps with merged token pair to its left
-            if pair[0] == merge_pair[1]:
-                new_merges = [idx for idx in merge_pair_idxs if idx + len(merge_pair[0]) in pair_indices]
-                if len(new_merges) > 0:
-                    pair_indices[:] = [idx for idx in pair_indices if idx not in new_merges]
-                    all_new_merges[(b"".join(merge_pair), pair[1])] += new_merges
+            if pair[0] == merge_pair[1] or pair[1] == merge_pair[0]:
+                for pretoken, pair_idxs in list(pair_idxs_per_pretoken.items()):
+                    # merge_pair_idxs =
 
-            # token pair overlaps with merged token pair to its right
-            if pair[1] == merge_pair[0]:
-                new_merges = [idx for idx in pair_indices if idx + len(pair[0]) in merge_pair_idxs]
-                if len(new_merges) > 0:
-                    pair_indices[:] = [idx for idx in pair_indices if idx not in new_merges]
-                    all_new_merges[(pair[0], b"".join(merge_pair))] += new_merges
+                    merge_pair_idxs = merge_pair_idxs_per_pretoken.get(pretoken)
+                    if merge_pair_idxs is None:
+                        continue
 
-            if len(pair_indices) == 0:
-                del token_pairs_to_indices[pair]
+                    # token pair overlaps with merged token pair to its left
+                    if pair[1] == merge_pair[0]:
+                        new_merges = [idx for idx in pair_idxs if idx + len(pair[0]) in merge_pair_idxs]
+                        if len(new_merges) > 0:
+                            pair_idxs[:] = [idx for idx in pair_idxs if idx not in new_merges]
+                            all_new_merges[(pair[0], b"".join(merge_pair))][pretoken] += new_merges
+
+                    # token pair overlaps with merged token pair to its right
+                    if pair[0] == merge_pair[1]:
+                        new_merges = [idx for idx in merge_pair_idxs if idx + len(merge_pair[0]) in pair_idxs]
+                        if len(new_merges) > 0:
+                            pair_idxs[:] = [idx for idx in pair_idxs if idx - len(merge_pair[0]) not in new_merges]
+                            all_new_merges[(b"".join(merge_pair), pair[1])][pretoken] += new_merges
+
+                    if len(pair_idxs) == 0:
+                        del token_pairs_to_indices[pair][pretoken]
 
         token_pairs_to_indices.update(all_new_merges)
         del token_pairs_to_indices[merge_pair]
@@ -144,27 +151,28 @@ class Tokenizer:
         merges = []
 
         # create pretoken -> (token_tuple -> list of indices)
-        pretoken_to_token_pairs_and_indices = {
-            pretoken: self._get_token_pair_indices(pretoken) for pretoken in pretokenize_counter
-        }
+        token_pair_idxs = defaultdict(dict)
+        for pretoken in pretokenize_counter:
+            token_indices = self._get_token_pair_indices(pretoken)
+            for token_pair, idxs in token_indices.items():
+                token_pair_idxs[token_pair][pretoken] = idxs
 
         for _ in tqdm(range(self.vocab_size - len(vocab))):
             # determine most common token pair
-            token_pair_counts = Counter()
-            for pretoken, pretoken_count in pretokenize_counter.items():
-                for token_pair, token_indices in pretoken_to_token_pairs_and_indices[pretoken].items():
-                    token_pair_counts[token_pair] += len(token_indices) * pretoken_count
-
-            # get token pair to merge
-            merge_pair = max(token_pair_counts.items(), key=lambda item: (item[1], item[0]))[0]
+            merge_pair = max(
+                token_pair_idxs.items(),
+                key=lambda item: (
+                    sum(pretokenize_counter[pretoken] * len(idxs) for pretoken, idxs in item[1].items()),
+                    item[0],
+                ),
+            )[0]
 
             # merge
             vocab.add(b"".join(merge_pair))
             merges.append(merge_pair)
 
             # update pretoken_token_dict
-            for token_pairs_and_indices in pretoken_to_token_pairs_and_indices.values():
-                self.merge_token_pair_in_token_pairs_to_indices(token_pairs_and_indices, merge_pair)
+            self.merge_token_pair_in_token_pairs_to_indices(token_pair_idxs, merge_pair)
 
         self.vocab = vocab
         self.merges = merges
@@ -173,12 +181,14 @@ class Tokenizer:
 
 
 if __name__ == "__main__":
-    tokenizer = Tokenizer(vocab_size=2**12)
+    tokenizer = Tokenizer(vocab_size=1000)
 
-    input_path = "data/TinyStories-valid.txt"
+    # input_path = "data/TinyStories-valid.txt"
+    input_path = "../tests/fixtures/tinystories_sample_5M.txt"
+    # "tinystories_sample_5M.txt"
 
     counter = tokenizer.pretokenize(input_path=input_path)
-    print(counter.most_common(3))
+    print(counter.most_common(20))
 
     vocab, merges = tokenizer.tokenize(counter)
     # print(f"{vocab=}")
