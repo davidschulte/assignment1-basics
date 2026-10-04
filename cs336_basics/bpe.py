@@ -44,19 +44,10 @@ class Tokenizer:
         f.seek(start)
         return f.read(end - start).decode("utf-8", errors="ignore")
 
-    # def read_chunks(self, input_path: str) -> list[str]:
-    #     with open(input_path, "rb") as f:
-    #         boundaries = find_chunk_boundaries(
-    #             file=f, desired_num_chunks=self.num_chunk_processes, split_special_token=self.eos
-    #         )
-    #         chunks = [self._read_chunk(f, boundary) for boundary in zip(boundaries[:-1], boundaries[1:])]
-    #
-    #     return chunks
-
-    def _split_chunk_to_docs(self, chunk: str) -> list[str]:
+    def _split_chunk_to_segments(self, chunk: str) -> list[str]:
         delim = "|".join(re.escape(s) for s in self.special_tokens)
 
-        return re.split(delim, chunk)
+        return [seg for seg in re.split(f"({delim})", chunk) if len(seg) > 0]
 
     def pretokenize_doc(self, doc: str):
         counter = Counter()
@@ -70,8 +61,9 @@ class Tokenizer:
 
         with open(input_path, "rb") as f:
             chunk = self._read_chunk(f, boundaries)
-        for doc in tqdm(self._split_chunk_to_docs(chunk)):
-            counter += self.pretokenize_doc(doc)
+        for seg in tqdm(self._split_chunk_to_segments(chunk)):
+            if seg not in self.special_tokens:
+                counter += self.pretokenize_doc(seg)
 
         return counter
 
