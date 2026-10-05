@@ -1,13 +1,14 @@
 from cs336_basics.pretokenization_example import find_chunk_boundaries
+import json
 import os
-import numpy as np
+import pathlib
 
 from tqdm import tqdm
 import regex as re
 
 from collections import Counter, defaultdict
 from multiprocessing import Pool
-from typing import BinaryIO
+from typing import BinaryIO, Self
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -239,6 +240,44 @@ class Tokenizer:
         self.merges = merges
 
         return vocab, merges
+
+    def save(self, output_dir: str | os.PathLike):
+        output_dir = pathlib.Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = {
+            "vocab_size": len(self.vocab),
+            "eos": self.eos.decode(errors="surrogateescape"),
+            "num_chunk_processes": self.num_chunk_processes,
+            "pat": self.pat,
+            "special_tokens": self.special_tokens,
+        }
+
+        (output_dir / "config.json").write_text(json.dumps(config))
+        (output_dir / "vocab.json").write_text(
+            json.dumps({idx: v.decode(errors="surrogateescape") for idx, v in self.vocab.items()})
+        )
+        (output_dir / "merges.json").write_text(
+            json.dumps([[token.decode(errors="surrogateescape") for token in pair] for pair in self.merges])
+        )
+
+    @classmethod
+    def load(cls, dir: str | os.PathLike) -> Self:
+        dir = pathlib.Path(dir)
+        config = json.loads((dir / "config.json").read_text())
+        config["eos"] = config["eos"].encode(errors="surrogateescape")
+
+        vocab = json.loads((dir / "vocab.json").read_text())
+        vocab = {int(idx): v.encode(errors="surrogateescape") for idx, v in vocab.items()}
+
+        merges = json.loads((dir / "merges.json").read_text())
+        merges = [tuple(token.encode(errors="surrogateescape") for token in pair) for pair in merges]
+
+        tokenizer = Tokenizer(**config)
+        tokenizer.vocab = vocab
+        tokenizer.merges = merges
+
+        return tokenizer
 
 
 if __name__ == "__main__":
