@@ -154,7 +154,7 @@ class Tokenizer:
     def count_token_pairs(tokens: list[bytes]) -> Counter[tuple[bytes, bytes]]:
         return Counter(zip(tokens[:-1], tokens[1:]))
 
-    def tokenize(self, pretoken_counter: Counter[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    def train_vocab_and_merges(self, pretoken_counter: Counter[str]) -> Self:
         vocab = self._init_vocab()
         merges = []
         """
@@ -239,7 +239,11 @@ class Tokenizer:
         self.vocab = vocab
         self.merges = merges
 
-        return vocab, merges
+        return self
+
+    def fit(self, input_path: str | os.PathLike):
+        pretoken_counter = self.pretokenize(input_path)
+        self.train_vocab_and_merges(pretoken_counter)
 
     def save(self, output_dir: str | os.PathLike):
         output_dir = pathlib.Path(output_dir)
@@ -290,7 +294,7 @@ if __name__ == "__main__":
     counter = tokenizer.pretokenize(input_path=input_path)
     print(counter.most_common(20))
 
-    vocab, merges = tokenizer.tokenize(counter)
+    vocab, merges = tokenizer.train_vocab_and_merges(counter)
     # print(f"{vocab=}")
     print(f"{merges=}")
 
@@ -309,10 +313,8 @@ def train_bpe(
     special_tokens: list[str] | None = None,
     eos: bytes = b"<|endoftext|>",
     num_chunk_processes: int = 16,
-) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+) -> Tokenizer:
     tokenizer = Tokenizer(vocab_size, special_tokens=special_tokens, num_chunk_processes=num_chunk_processes, eos=eos)
-    counter = tokenizer.pretokenize(input_path=input_path)
+    tokenizer.fit(input_path)
 
-    vocab, merges = tokenizer.tokenize(counter)
-
-    return vocab, merges
+    return tokenizer
