@@ -31,10 +31,10 @@ class Tokenizer:
         self.vocab = self._init_vocab()
         self.merges = []
 
-    def _init_vocab(self) -> set[bytes]:
-        vocab = set(bytes([b]) for b in range(256))
-        for special_token in self.special_tokens:
-            vocab.add(special_token.encode())
+    def _init_vocab(self) -> dict[int, bytes]:
+        vocab = {idx: bytes([idx]) for idx in range(256)}
+        for idx, special_token in enumerate(self.special_tokens):
+            vocab[idx + 256] = special_token.encode()
 
         return vocab
 
@@ -183,7 +183,7 @@ class Tokenizer:
             for token_pair, token_pair_count in token_pair_counter.items():
                 token_pairs_to_pretoken_and_count[token_pair][pretoken] = token_pair_count
 
-        for _ in tqdm(range(self.vocab_size - len(vocab))):
+        for idx in tqdm(range(len(vocab), self.vocab_size)):
             # determine most common token pair
             merge_pair = max(
                 token_pairs_to_pretoken_and_count.items(),
@@ -196,7 +196,7 @@ class Tokenizer:
             )[0]
 
             # merge
-            vocab.add(b"".join(merge_pair))
+            vocab[idx] = b"".join(merge_pair)
             merges.append(merge_pair)
 
             pretokens_to_merge = set()
@@ -238,7 +238,7 @@ class Tokenizer:
         self.vocab = vocab
         self.merges = merges
 
-        return dict(enumerate(vocab)), merges
+        return vocab, merges
 
 
 if __name__ == "__main__":
