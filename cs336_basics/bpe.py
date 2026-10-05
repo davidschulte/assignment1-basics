@@ -86,16 +86,10 @@ class Tokenizer:
 
         return counter
 
-    # TODO: Handle special tokens
     @staticmethod
-    def _get_token_pair_indices(pretoken: str) -> dict[tuple[bytes, bytes], list[int]]:
-        """For each token pair in a pretoken, list its starting indices"""
-        byte_pair_to_indices = defaultdict(list)
-        pretoken_bytes = pretoken.encode()
-        for idx in range(len(pretoken_bytes) - 1):
-            byte_pair_to_indices[(pretoken_bytes[idx : idx + 1], pretoken_bytes[idx + 1 : idx + 2])].append(idx)
-
-        return byte_pair_to_indices
+    def get_byte_pairs(text: str) -> list[tuple[bytes, bytes]]:
+        text_bytes = text.encode()
+        return [(bytes(text_bytes[i : i + 1]), bytes(text_bytes[i + 1 : i + 2])) for i in range(len(text_bytes) - 1)]
 
     @staticmethod
     def merge_token_pair_in_token_pairs_to_indices(
@@ -138,23 +132,65 @@ class Tokenizer:
         token_pairs_to_indices.update(all_new_merges)
         del token_pairs_to_indices[merge_pair]
 
-    def tokenize(self, pretokenize_counter: Counter[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    @staticmethod
+    def merge(tokens: list[bytes], merge_pair: tuple[bytes, bytes]) -> list[bytes]:
+        new_tokens = []
+        idx = 0
+        while idx < len(tokens) - 1:
+            if (tokens[idx], tokens[idx + 1]) == merge_pair:
+                new_tokens.append(b"".join(merge_pair))
+                idx += 2
+            else:
+                new_tokens.append(tokens[idx])
+                idx += 1
+
+        if idx == len(tokens) - 1:
+            new_tokens.append(tokens[idx])
+
+        return new_tokens
+
+    @staticmethod
+    def count_token_pairs(tokens: list[bytes]) -> Counter[tuple[bytes, bytes]]:
+        return Counter(zip(tokens[:-1], tokens[1:]))
+
+    def tokenize(self, pretoken_counter: Counter[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
         vocab = self._init_vocab()
         merges = []
+        """
+        Steps:
+        1. Initialize dicts:
+        pretoken -> pretoken_count √
+        pretoken -> tokens
+        token_pair -> (pretokens in which its included, num how often)
 
-        # create pretoken -> (token_tuple -> list of indices)
-        token_pair_idxs = defaultdict(dict)
-        for pretoken in pretokenize_counter:
-            token_indices = self._get_token_pair_indices(pretoken)
-            for token_pair, idxs in token_indices.items():
-                token_pair_idxs[token_pair][pretoken] = idxs
+        2. Counter number of token pair occurrences
+
+        3. Find the maximum
+
+        4. Merge
+        4.1. Find all pairs that have to be checked: overlaps from both sides or the merge pair itself
+        4.2. Find all their pretokens where these pairs are both included: Either overlaps left AND right or merge pair itself
+        4.3. For all overlap pairs and merge pair, remove the counter for all the selected pretokens
+        4.4. For all of the pretokens, merge tokens with merge pair
+        4.5. For all of the pretokens, update the counts of overlap tokens
+
+        """
+        pretoken_to_tokens = {pretoken: [bytes([b]) for b in pretoken.encode()] for pretoken in pretoken_counter}
+        token_pairs_to_pretoken_and_count = defaultdict(dict)
+
+        for pretoken, tokens in pretoken_to_tokens.items():
+            token_pair_counter = self.count_token_pairs(tokens)
+            for token_pair, token_pair_count in token_pair_counter.items():
+                token_pairs_to_pretoken_and_count[token_pair][pretoken] = token_pair_count
 
         for _ in tqdm(range(self.vocab_size - len(vocab))):
             # determine most common token pair
             merge_pair = max(
-                token_pair_idxs.items(),
+                token_pairs_to_pretoken_and_count.items(),
                 key=lambda item: (
-                    sum(pretokenize_counter[pretoken] * len(idxs) for pretoken, idxs in item[1].items()),
+                    sum(
+                        token_pair_count * pretoken_counter[pretoken] for pretoken, token_pair_count in item[1].items()
+                    ),
                     item[0],
                 ),
             )[0]
@@ -163,8 +199,41 @@ class Tokenizer:
             vocab.add(b"".join(merge_pair))
             merges.append(merge_pair)
 
-            # update pretoken_token_dict
-            self.merge_token_pair_in_token_pairs_to_indices(token_pair_idxs, merge_pair)
+            pretokens_to_merge = set()
+            left_overlap_token_pairs = set(
+                token_pair for token_pair in token_pairs_to_pretoken_and_count if token_pair[1] == merge_pair[0]
+            )
+            right_overlap_token_pairs = set(
+                token_pair for token_pair in token_pairs_to_pretoken_and_count if token_pair[0] == merge_pair[1]
+            )
+            pretokens_to_merge = (
+                set(
+                    pretoken
+                    for pair in left_overlap_token_pairs
+                    for pretoken in list(token_pairs_to_pretoken_and_count[pair].keys())
+                )
+                & set(
+                    pretoken
+                    for pair in right_overlap_token_pairs
+                    for pretoken in list(token_pairs_to_pretoken_and_count[pair].keys())
+                )
+            ) | set(token_pairs_to_pretoken_and_count[merge_pair].keys())
+
+            for token_pair in left_overlap_token_pairs | right_overlap_token_pairs | set([merge_pair]):
+                for pretoken in pretokens_to_merge & set(token_pairs_to_pretoken_and_count[token_pair].keys()):
+                    token_pairs_to_pretoken_and_count[token_pair].pop(pretoken, None)
+
+            for pretoken in pretokens_to_merge:
+                tokens = pretoken_to_tokens[pretoken]
+                updated_tokens = self.merge(tokens, merge_pair)
+
+                if updated_tokens != tokens:
+                    tokens = updated_tokens
+                    pretoken_to_tokens[pretoken] = tokens
+
+                token_pair_counter = self.count_token_pairs(tokens)
+                for token_pair, token_pair_count in token_pair_counter.items():
+                    token_pairs_to_pretoken_and_count[token_pair][pretoken] = token_pair_count
 
         self.vocab = vocab
         self.merges = merges
